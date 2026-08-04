@@ -14,7 +14,7 @@ export interface OpenCvModule {
   Size: new (w: number, h: number) => unknown
   Point: new (x: number, y: number) => unknown
   Scalar: new (...args: number[]) => unknown
-  imread: (canvas: HTMLCanvasElement) => CvMat
+  imread: (source: HTMLCanvasElement | HTMLImageElement) => CvMat
   imshow: (canvas: HTMLCanvasElement, mat: CvMat) => void
   cvtColor: (src: CvMat, dst: CvMat, code: number) => void
   GaussianBlur: (src: CvMat, dst: CvMat, ksize: unknown, sigmaX: number) => void
