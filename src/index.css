@@ -658,6 +658,11 @@ input[type='range'] {
   color: #fca5a5;
   border-radius: 8px;
   font-size: 0.9rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
 }
 
 .toast {
@@ -677,6 +682,47 @@ input[type='range'] {
   gap: 1rem;
   z-index: 200;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+.toast-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.error-fallback {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.5rem;
+  text-align: center;
+  gap: 0.75rem;
+}
+
+.error-fallback h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.error-fallback p {
+  margin: 0;
+  color: var(--text-muted);
+  max-width: 28rem;
+}
+
+.error-fallback-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.crop-detect-error {
+  color: #fca5a5;
+  font-size: 0.85rem;
+  margin: 0.25rem 0 0;
 }
 
 .loading-overlay {

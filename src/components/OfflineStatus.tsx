@@ -33,7 +33,7 @@ export function OfflineStatus({ offlineReady }: OfflineStatusProps) {
 
   useEffect(() => {
     const opencvUrl = `${import.meta.env.BASE_URL}opencv/opencv.js`
-    isAssetCached(opencvUrl).then(setOpencvCached)
+    void isAssetCached(opencvUrl).then(setOpencvCached)
   }, [offlineReady])
 
   return (

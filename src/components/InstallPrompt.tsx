@@ -62,7 +62,7 @@ export function InstallPrompt() {
           <button type="button" className="btn btn-ghost" onClick={() => setDismissed(true)}>
             Not now
           </button>
-          <button type="button" className="btn btn-primary" onClick={handleInstall}>
+          <button type="button" className="btn btn-primary" onClick={() => void handleInstall()}>
             Install
           </button>
         </div>

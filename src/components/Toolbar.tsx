@@ -1,7 +1,9 @@
+import type { ReactNode } from 'react'
+
 interface ToolbarProps {
   title: string
   onBack?: () => void
-  rightAction?: React.ReactNode
+  rightAction?: ReactNode
 }
 
 export function Toolbar({ title, onBack, rightAction }: ToolbarProps) {

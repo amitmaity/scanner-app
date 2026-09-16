@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { normalizeError } from '../lib/errors'
 import { exportPagesAsImages, exportPagesToPdf } from '../lib/pdf'
 import type { Page } from '../types'
 
@@ -15,28 +16,49 @@ export function ExportDialog({ pages, documentName, onClose }: ExportDialogProps
   const [format, setFormat] = useState<'pdf' | 'jpeg' | 'png'>('pdf')
   const [isExporting, setIsExporting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [progress, setProgress] = useState<{ current: number; total: number } | null>(null)
 
   const handleExport = async () => {
     setIsExporting(true)
     setError(null)
+    setProgress(null)
     try {
+      const onProgress = (current: number, total: number) => setProgress({ current, total })
       if (format === 'pdf') {
-        await exportPagesToPdf(pages, filename)
+        await exportPagesToPdf(pages, filename.trim(), onProgress)
       } else {
-        await exportPagesAsImages(pages, format, filename)
+        await exportPagesAsImages(pages, format, filename.trim(), onProgress)
       }
       onClose()
-    } catch {
-      setError('Export failed. Please try again.')
+    } catch (err) {
+      const { message } = normalizeError(err, 'EXPORT_FAILED')
+      setError(message)
       setIsExporting(false)
+      setProgress(null)
     }
   }
 
+  const exportLabel = isExporting
+    ? progress
+      ? `Exporting page ${progress.current} of ${progress.total}…`
+      : 'Exporting…'
+    : error
+      ? 'Retry'
+      : 'Export'
+
   return (
     <div className="modal-backdrop" onClick={onClose} role="presentation">
-      <div className="modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-        <h2>Export scan</h2>
-        <p className="modal-subtitle">{pages.length} page{pages.length !== 1 ? 's' : ''}</p>
+      <div
+        className="modal"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="export-dialog-title"
+      >
+        <h2 id="export-dialog-title">Export scan</h2>
+        <p className="modal-subtitle">
+          {pages.length} page{pages.length !== 1 ? 's' : ''}
+        </p>
 
         <label className="form-label">
           Filename
@@ -81,7 +103,11 @@ export function ExportDialog({ pages, documentName, onClose }: ExportDialogProps
           </label>
         </div>
 
-        {error && <p className="error-banner">{error}</p>}
+        {error && (
+          <p className="error-banner" role="alert">
+            {error}
+          </p>
+        )}
 
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onClose} disabled={isExporting}>
@@ -90,10 +116,10 @@ export function ExportDialog({ pages, documentName, onClose }: ExportDialogProps
           <button
             type="button"
             className="btn btn-primary"
-            onClick={handleExport}
+            onClick={() => void handleExport()}
             disabled={isExporting || !filename.trim()}
           >
-            {isExporting ? 'Exporting…' : 'Export'}
+            {exportLabel}
           </button>
         </div>
       </div>

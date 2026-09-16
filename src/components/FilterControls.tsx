@@ -89,8 +89,18 @@ export function FilterControls({
             max={100}
             value={filter.brightness}
             onChange={(e) => onChange({ brightness: Number(e.target.value) })}
-            onMouseUp={onApply}
-            onTouchEnd={onApply}
+            onMouseUp={() => onApply()}
+            onTouchEnd={() => onApply()}
+            onKeyUp={(e) => {
+              if (
+                e.key === 'ArrowLeft' ||
+                e.key === 'ArrowRight' ||
+                e.key === 'Home' ||
+                e.key === 'End'
+              ) {
+                onApply()
+              }
+            }}
           />
         </label>
         <label className="slider-label">
@@ -101,8 +111,18 @@ export function FilterControls({
             max={100}
             value={filter.contrast}
             onChange={(e) => onChange({ contrast: Number(e.target.value) })}
-            onMouseUp={onApply}
-            onTouchEnd={onApply}
+            onMouseUp={() => onApply()}
+            onTouchEnd={() => onApply()}
+            onKeyUp={(e) => {
+              if (
+                e.key === 'ArrowLeft' ||
+                e.key === 'ArrowRight' ||
+                e.key === 'Home' ||
+                e.key === 'End'
+              ) {
+                onApply()
+              }
+            }}
           />
         </label>
       </div>

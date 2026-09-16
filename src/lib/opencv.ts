@@ -1,6 +1,11 @@
+import { ERROR_MESSAGES, ScannerError } from './errors'
+
 const BASE = import.meta.env.BASE_URL
 
+export const OPENCV_LOAD_TIMEOUT_MS = 30_000
+
 let loadPromise: Promise<void> | null = null
+let loadTimeoutId: ReturnType<typeof setTimeout> | null = null
 
 declare global {
   interface Window {
@@ -103,12 +108,21 @@ export interface CvClahe {
 
 export function getCv(): OpenCvModule {
   if (!window.cv) {
-    throw new Error('OpenCV.js is not loaded yet')
+    throw new ScannerError('OPENCV_LOAD_FAILED', ERROR_MESSAGES.OPENCV_LOAD_FAILED)
   }
   return window.cv
 }
 
-export function loadOpenCV(): Promise<void> {
+/** Test-only: allows retrying a failed load without reloading the page. */
+export function resetOpenCvLoader(): void {
+  loadPromise = null
+  if (loadTimeoutId !== null) {
+    window.clearTimeout(loadTimeoutId)
+    loadTimeoutId = null
+  }
+}
+
+export function loadOpenCV(options?: { timeoutMs?: number }): Promise<void> {
   if (window.cv?.Mat) {
     return Promise.resolve()
   }
@@ -117,23 +131,53 @@ export function loadOpenCV(): Promise<void> {
     return loadPromise
   }
 
-  loadPromise = new Promise((resolve, reject) => {
+  const timeoutMs = options?.timeoutMs ?? OPENCV_LOAD_TIMEOUT_MS
+
+  loadPromise = new Promise<void>((resolve, reject) => {
+    let settled = false
+
+    const finish = (action: () => void) => {
+      if (settled) return
+      settled = true
+      if (loadTimeoutId !== null) {
+        window.clearTimeout(loadTimeoutId)
+        loadTimeoutId = null
+      }
+      action()
+    }
+
+    const fail = (err: unknown) => {
+      loadPromise = null
+      reject(err)
+    }
+
+    loadTimeoutId = window.setTimeout(() => {
+      finish(() =>
+        fail(new ScannerError('OPENCV_TIMEOUT', ERROR_MESSAGES.OPENCV_TIMEOUT)),
+      )
+    }, timeoutMs)
+
     const script = document.createElement('script')
     script.src = `${BASE}opencv/opencv.js`
     script.async = true
     script.onload = () => {
       const checkReady = () => {
+        if (settled) return
         if (window.cv?.Mat) {
-          resolve()
+          finish(() => resolve())
         } else if (window.cv) {
-          window.cv.onRuntimeInitialized = () => resolve()
+          window.cv.onRuntimeInitialized = () => finish(() => resolve())
         } else {
-          setTimeout(checkReady, 50)
+          window.setTimeout(checkReady, 50)
         }
       }
       checkReady()
     }
-    script.onerror = () => reject(new Error('Failed to load OpenCV.js'))
+    script.onerror = () => {
+      finish(() =>
+        fail(new ScannerError('OPENCV_LOAD_FAILED', ERROR_MESSAGES.OPENCV_LOAD_FAILED)),
+      )
+    }
     document.head.appendChild(script)
   })
 

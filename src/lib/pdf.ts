@@ -1,5 +1,6 @@
 import { jsPDF } from 'jspdf'
 import type { Page } from '../types'
+import { ScannerError } from './errors'
 import { blobToImage } from './opencv'
 
 interface RenderedPage {
@@ -7,6 +8,10 @@ interface RenderedPage {
   width: number
   height: number
 }
+
+export type ExportProgress = (current: number, total: number) => void
+
+const DOWNLOAD_REVOKE_MS = 60_000
 
 async function renderPage(page: Page): Promise<RenderedPage> {
   const blob = page.processedBlob ?? page.originalBlob
@@ -24,19 +29,33 @@ async function renderPage(page: Page): Promise<RenderedPage> {
   }
 }
 
-export async function exportPagesToPdf(pages: Page[], filename: string): Promise<void> {
+export async function exportPagesToPdf(
+  pages: Page[],
+  filename: string,
+  onProgress?: ExportProgress,
+): Promise<void> {
   if (pages.length === 0) return
 
-  const first = await renderPage(pages[0])
-  const orientation = first.width > first.height ? 'landscape' : 'portrait'
-  const pdf = new jsPDF({ orientation, unit: 'pt', format: 'a4' })
+  let pdf: InstanceType<typeof jsPDF> | null = null
 
   for (let i = 0; i < pages.length; i++) {
-    const rendered = i === 0 ? first : await renderPage(pages[i])
+    onProgress?.(i + 1, pages.length)
+    let rendered: RenderedPage
+    try {
+      rendered = await renderPage(pages[i])
+    } catch (err) {
+      throw new ScannerError(
+        'EXPORT_FAILED',
+        `Failed to export page ${i + 1} of ${pages.length}.`,
+        { cause: err },
+      )
+    }
 
-    if (i > 0) {
-      const pageOrientation = rendered.width > rendered.height ? 'landscape' : 'portrait'
-      pdf.addPage('a4', pageOrientation)
+    const orientation = rendered.width > rendered.height ? 'landscape' : 'portrait'
+    if (!pdf) {
+      pdf = new jsPDF({ orientation, unit: 'pt', format: 'a4' })
+    } else {
+      pdf.addPage('a4', orientation)
     }
 
     const pageWidth = pdf.internal.pageSize.getWidth()
@@ -50,7 +69,7 @@ export async function exportPagesToPdf(pages: Page[], filename: string): Promise
     pdf.addImage(rendered.dataUrl, 'JPEG', x, y, w, h)
   }
 
-  pdf.save(`${filename}.pdf`)
+  pdf?.save(`${filename}.pdf`)
 }
 
 export function downloadBlob(blob: Blob, filename: string): void {
@@ -59,36 +78,49 @@ export function downloadBlob(blob: Blob, filename: string): void {
   a.href = url
   a.download = filename
   a.click()
-  URL.revokeObjectURL(url)
+  window.setTimeout(() => URL.revokeObjectURL(url), DOWNLOAD_REVOKE_MS)
 }
 
 export async function exportPagesAsImages(
   pages: Page[],
   format: 'png' | 'jpeg',
   baseName: string,
+  onProgress?: ExportProgress,
 ): Promise<void> {
   const mime = format === 'png' ? 'image/png' : 'image/jpeg'
   const ext = format === 'png' ? 'png' : 'jpg'
+  const failures: number[] = []
 
   for (let i = 0; i < pages.length; i++) {
-    const blob = pages[i].processedBlob ?? pages[i].originalBlob
-    const canvas = document.createElement('canvas')
-    const img = await blobToImage(blob)
-    canvas.width = img.naturalWidth
-    canvas.height = img.naturalHeight
-    const ctx = canvas.getContext('2d')
-    if (!ctx) continue
-    ctx.drawImage(img, 0, 0)
+    onProgress?.(i + 1, pages.length)
+    try {
+      const blob = pages[i].processedBlob ?? pages[i].originalBlob
+      const canvas = document.createElement('canvas')
+      const img = await blobToImage(blob)
+      canvas.width = img.naturalWidth
+      canvas.height = img.naturalHeight
+      const ctx = canvas.getContext('2d')
+      if (!ctx) throw new Error('Could not get canvas context')
+      ctx.drawImage(img, 0, 0)
 
-    const outBlob = await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob(
-        (b) => (b ? resolve(b) : reject(new Error('Failed to export image'))),
-        mime,
-        0.92,
-      )
-    })
+      const outBlob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob(
+          (b) => (b ? resolve(b) : reject(new Error('Failed to export image'))),
+          mime,
+          0.92,
+        )
+      })
 
-    const suffix = pages.length > 1 ? `-${i + 1}` : ''
-    downloadBlob(outBlob, `${baseName}${suffix}.${ext}`)
+      const suffix = pages.length > 1 ? `-${i + 1}` : ''
+      downloadBlob(outBlob, `${baseName}${suffix}.${ext}`)
+    } catch {
+      failures.push(i + 1)
+    }
+  }
+
+  if (failures.length > 0) {
+    const list = failures.join(', ')
+    const noun = failures.length === 1 ? 'page' : 'pages'
+    throw new ScannerError('EXPORT_FAILED', `Failed to export ${noun} ${list}.`)
   }
 }

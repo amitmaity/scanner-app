@@ -7,7 +7,6 @@ import { InstallPrompt } from './components/InstallPrompt'
 import { OfflineStatus } from './components/OfflineStatus'
 import { PageList } from './components/PageList'
 import { Toolbar } from './components/Toolbar'
-import { loadOpenCV } from './lib/opencv'
 import { removeDocument, useScannerStore } from './state/store'
 
 interface AppProps {
@@ -25,6 +24,7 @@ export default function App({ offlineReady }: AppProps) {
     isProcessing,
     error,
     hydrate,
+    preloadOpenCV,
     newDocument,
     openDocument,
     setStep,
@@ -50,15 +50,13 @@ export default function App({ offlineReady }: AppProps) {
   )
 
   useEffect(() => {
-    hydrate()
+    void hydrate()
   }, [hydrate])
 
   useEffect(() => {
     if (!navigator.onLine) return
-    loadOpenCV().catch(() => {
-      // OpenCV will load when needed; offline cache may populate on retry
-    })
-  }, [])
+    void preloadOpenCV()
+  }, [preloadOpenCV])
 
   useEffect(() => {
     if (!workingBlob) {
@@ -72,7 +70,7 @@ export default function App({ offlineReady }: AppProps) {
 
   useEffect(() => {
     if (step === 'enhance' && prevStepRef.current !== 'enhance') {
-      applyEnhancement()
+      void applyEnhancement()
     }
     prevStepRef.current = step
   }, [step, applyEnhancement])
@@ -131,7 +129,7 @@ export default function App({ offlineReady }: AppProps) {
                       <button
                         type="button"
                         className="btn btn-icon danger"
-                        onClick={() => handleDeleteDocument(doc.id)}
+                        onClick={() => void handleDeleteDocument(doc.id)}
                         aria-label="Delete scan"
                       >
                         ×
@@ -156,7 +154,7 @@ export default function App({ offlineReady }: AppProps) {
         <CropEditor
           capture={pendingCapture}
           onCornersChange={updateCorners}
-          onConfirm={confirmCrop}
+          onConfirm={() => void confirmCrop()}
           onCancel={() => {
             if (pendingCapture.imageUrl) URL.revokeObjectURL(pendingCapture.imageUrl)
             setStep('capture')
@@ -171,8 +169,8 @@ export default function App({ offlineReady }: AppProps) {
           filter={workingFilter}
           previewUrl={previewUrl}
           onChange={setFilter}
-          onApply={applyEnhancement}
-          onAddPage={addPageToDocument}
+          onApply={() => void applyEnhancement()}
+          onAddPage={() => void addPageToDocument()}
           onRetake={() => setStep('capture')}
           isProcessing={isProcessing}
         />
@@ -184,8 +182,8 @@ export default function App({ offlineReady }: AppProps) {
           <PageList
             pages={currentDocument.pages}
             onAddPage={() => setStep('capture')}
-            onDeletePage={deletePage}
-            onMovePage={reorderPages}
+            onDeletePage={(pageId) => void deletePage(pageId)}
+            onMovePage={(from, to) => void reorderPages(from, to)}
             onExport={() => setShowExport(true)}
           />
         </>
@@ -200,11 +198,26 @@ export default function App({ offlineReady }: AppProps) {
       )}
 
       {error && (
-        <div className="toast" role="alert">
-          <span>{error}</span>
-          <button type="button" className="btn btn-ghost" onClick={() => setError(null)}>
-            Dismiss
-          </button>
+        <div className="toast" role="alert" aria-live="assertive">
+          <span>{error.message}</span>
+          <div className="toast-actions">
+            {error.retry && (
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => {
+                  const retry = error.retry
+                  setError(null)
+                  retry?.()
+                }}
+              >
+                Retry
+              </button>
+            )}
+            <button type="button" className="btn btn-ghost" onClick={() => setError(null)}>
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
     </div>

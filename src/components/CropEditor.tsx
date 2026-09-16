@@ -27,6 +27,7 @@ export function CropEditor({
   const [dragIndex, setDragIndex] = useState<number | null>(null)
   const [displaySize, setDisplaySize] = useState({ width: 0, height: 0 })
   const [isRedetecting, setIsRedetecting] = useState(false)
+  const [detectError, setDetectError] = useState<string | null>(null)
 
   const scale = displaySize.width > 0 ? displaySize.width / capture.width : 1
 
@@ -95,9 +96,12 @@ export function CropEditor({
 
   const handleAutoDetect = async () => {
     setIsRedetecting(true)
+    setDetectError(null)
     try {
       const corners = await detectDocumentEdges(capture.blob, capture.width, capture.height)
       onCornersChange(corners)
+    } catch {
+      setDetectError('Auto-detect failed; drag corners manually.')
     } finally {
       setIsRedetecting(false)
     }
@@ -170,11 +174,16 @@ export function CropEditor({
         <button
           type="button"
           className="btn btn-secondary"
-          onClick={handleAutoDetect}
+          onClick={() => void handleAutoDetect()}
           disabled={isRedetecting || isProcessing}
         >
           {isRedetecting ? 'Detecting…' : 'Auto-detect edges'}
         </button>
+        {detectError && (
+          <p className="crop-detect-error" role="alert">
+            {detectError}
+          </p>
+        )}
         <p className="hint">Drag corners to adjust document borders</p>
       </div>
     </div>
