@@ -8,6 +8,10 @@ const deployUrl = 'https://amitmaity.github.io/scanner-app/'
 
 export default defineConfig({
   base,
+  // The OpenCV worker is a module worker (all Vite serves in dev).
+  worker: {
+    format: 'es',
+  },
   plugins: [
     react(),
     VitePWA({
@@ -65,21 +69,9 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2,wasm}'],
         navigateFallback: 'index.html',
         navigateFallbackDenylist: [/^\/scanner-app\/opencv\//],
+        // opencv.js is precached via includeAssets; the precache route answers
+        // its requests before any runtime route would.
         runtimeCaching: [
-          {
-            urlPattern: ({ url }) => url.pathname.endsWith('/opencv/opencv.js'),
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'opencv-cache',
-              expiration: {
-                maxEntries: 1,
-                maxAgeSeconds: 60 * 60 * 24 * 365,
-              },
-              cacheableResponse: {
-                statuses: [0, 200],
-              },
-            },
-          },
           {
             urlPattern: ({ request }) => request.destination === 'document',
             handler: 'NetworkFirst',

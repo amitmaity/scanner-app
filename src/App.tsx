@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { CameraCapture } from './components/CameraCapture'
 import { CropEditor } from './components/CropEditor'
 import { ExportDialog } from './components/ExportDialog'
@@ -7,47 +7,58 @@ import { InstallPrompt } from './components/InstallPrompt'
 import { OfflineStatus } from './components/OfflineStatus'
 import { PageList } from './components/PageList'
 import { Toolbar } from './components/Toolbar'
-import { removeDocument, useScannerStore } from './state/store'
+import {
+  MAX_NAME_LENGTH,
+  removeDocument,
+  selectCurrentDocument,
+  useScannerStore,
+} from './state/store'
 
 interface AppProps {
   offlineReady: boolean
 }
 
 export default function App({ offlineReady }: AppProps) {
+  const state = useScannerStore()
   const {
     step,
     documents,
-    currentDocumentId,
+    draftDocument,
     pendingCapture,
-    workingBlob,
+    editingPageId,
+    previewBlob,
     workingFilter,
     isProcessing,
+    isPreviewing,
     error,
     hydrate,
     preloadOpenCV,
     newDocument,
     openDocument,
-    setStep,
+    goHome,
+    startCapture,
+    showPages,
+    retake,
+    backToCrop,
+    editPage,
     setPendingCapture,
     updateCorners,
     confirmCrop,
     setFilter,
     applyEnhancement,
-    addPageToDocument,
+    savePage,
     deletePage,
     reorderPages,
-    clearPending,
+    renameDocument,
     setError,
-  } = useScannerStore()
+  } = state
 
   const [showExport, setShowExport] = useState(false)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const prevStepRef = useRef(step)
 
-  const currentDocument = useMemo(
-    () => documents.find((d) => d.id === currentDocumentId) ?? null,
-    [documents, currentDocumentId],
-  )
+  const currentDocument = selectCurrentDocument(state)
+  const isDraft = draftDocument !== null && currentDocument === draftDocument
 
   useEffect(() => {
     void hydrate()
@@ -59,14 +70,14 @@ export default function App({ offlineReady }: AppProps) {
   }, [preloadOpenCV])
 
   useEffect(() => {
-    if (!workingBlob) {
+    if (!previewBlob) {
       setPreviewUrl(null)
       return
     }
-    const url = URL.createObjectURL(workingBlob)
+    const url = URL.createObjectURL(previewBlob)
     setPreviewUrl(url)
     return () => URL.revokeObjectURL(url)
-  }, [workingBlob])
+  }, [previewBlob])
 
   useEffect(() => {
     if (step === 'enhance' && prevStepRef.current !== 'enhance') {
@@ -74,12 +85,6 @@ export default function App({ offlineReady }: AppProps) {
     }
     prevStepRef.current = step
   }, [step, applyEnhancement])
-
-  const goHome = () => {
-    clearPending()
-    setStep('home')
-    useScannerStore.setState({ currentDocumentId: null })
-  }
 
   const handleDeleteDocument = async (id: string) => {
     if (!confirm('Delete this scan?')) return
@@ -130,7 +135,7 @@ export default function App({ offlineReady }: AppProps) {
                         type="button"
                         className="btn btn-icon danger"
                         onClick={() => void handleDeleteDocument(doc.id)}
-                        aria-label="Delete scan"
+                        aria-label={`Delete ${doc.name}`}
                       >
                         ×
                       </button>
@@ -146,7 +151,7 @@ export default function App({ offlineReady }: AppProps) {
       {step === 'capture' && (
         <CameraCapture
           onCapture={setPendingCapture}
-          onCancel={() => (currentDocumentId ? setStep('pages') : goHome())}
+          onCancel={() => (currentDocument && !isDraft ? showPages() : goHome())}
         />
       )}
 
@@ -155,11 +160,7 @@ export default function App({ offlineReady }: AppProps) {
           capture={pendingCapture}
           onCornersChange={updateCorners}
           onConfirm={() => void confirmCrop()}
-          onCancel={() => {
-            if (pendingCapture.imageUrl) URL.revokeObjectURL(pendingCapture.imageUrl)
-            setStep('capture')
-            useScannerStore.setState({ pendingCapture: null })
-          }}
+          onCancel={retake}
           isProcessing={isProcessing}
         />
       )}
@@ -170,18 +171,27 @@ export default function App({ offlineReady }: AppProps) {
           previewUrl={previewUrl}
           onChange={setFilter}
           onApply={() => void applyEnhancement()}
-          onAddPage={() => void addPageToDocument()}
-          onRetake={() => setStep('capture')}
+          onSave={() => void savePage()}
+          onRetake={retake}
+          onBackToCrop={backToCrop}
+          isEditing={editingPageId !== null}
           isProcessing={isProcessing}
+          isPreviewing={isPreviewing}
         />
       )}
 
       {step === 'pages' && currentDocument && (
         <>
-          <Toolbar title={currentDocument.name} onBack={goHome} />
+          <Toolbar
+            title={currentDocument.name}
+            onBack={goHome}
+            onRename={(name) => void renameDocument(currentDocument.id, name)}
+            maxTitleLength={MAX_NAME_LENGTH}
+          />
           <PageList
             pages={currentDocument.pages}
-            onAddPage={() => setStep('capture')}
+            onAddPage={startCapture}
+            onEditPage={(pageId) => void editPage(pageId)}
             onDeletePage={(pageId) => void deletePage(pageId)}
             onMovePage={(from, to) => void reorderPages(from, to)}
             onExport={() => setShowExport(true)}
@@ -198,7 +208,10 @@ export default function App({ offlineReady }: AppProps) {
       )}
 
       {error && (
-        <div className="toast" role="alert" aria-live="assertive">
+        <div
+          className={`toast${error.tone === 'info' ? ' toast-info' : ''}`}
+          role={error.tone === 'info' ? 'status' : 'alert'}
+        >
           <span>{error.message}</span>
           <div className="toast-actions">
             {error.retry && (
@@ -211,7 +224,7 @@ export default function App({ offlineReady }: AppProps) {
                   retry?.()
                 }}
               >
-                Retry
+                {error.actionLabel ?? 'Retry'}
               </button>
             )}
             <button type="button" className="btn btn-ghost" onClick={() => setError(null)}>
