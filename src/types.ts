@@ -18,6 +18,8 @@ export interface Page {
   corners: Point[]
   filter: FilterSettings
   processedBlob: Blob | null
+  /** Small JPEG for the page grid; persisted so launch doesn't decode every page. */
+  thumbnailBlob: Blob | null
   thumbnailUrl: string | null
   createdAt: number
 }
@@ -49,14 +51,4 @@ export const DEFAULT_FILTER: FilterSettings = {
 
 export function createId(): string {
   return crypto.randomUUID()
-}
-
-export function defaultCorners(width: number, height: number): Point[] {
-  const margin = Math.min(width, height) * 0.05
-  return [
-    { x: margin, y: margin },
-    { x: width - margin, y: margin },
-    { x: width - margin, y: height - margin },
-    { x: margin, y: height - margin },
-  ]
 }

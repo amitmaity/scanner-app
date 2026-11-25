@@ -1,39 +1,30 @@
 import type { Point } from '../types'
-import { blobToCanvas, canvasToBlob, getCv, imageToMat, loadOpenCV } from './opencv'
-import { computeOutputSize } from './detectEdges'
+import { computeOutputSize, orderPoints } from './geometry'
+import { blobToImage, createCanvas, get2d, getCv, loadOpenCV } from './opencv'
 
-function orderPoints(points: Point[]): Point[] {
-  const sorted = [...points].sort((a, b) => a.y - b.y)
-  const top = sorted.slice(0, 2).sort((a, b) => a.x - b.x)
-  const bottom = sorted.slice(2, 4).sort((a, b) => a.x - b.x)
-  return [top[0], top[1], bottom[1], bottom[0]]
-}
-
+/**
+ * Warps the quad at `corners` to a flat rectangle. Returns pixels rather than
+ * an encoded image: the result is filtered and only encoded once, at save.
+ */
 export async function perspectiveCorrect(
-  blob: Blob,
+  source: Blob | HTMLImageElement | HTMLCanvasElement,
   corners: Point[],
-): Promise<Blob> {
+): Promise<HTMLCanvasElement> {
   await loadOpenCV()
   const cv = getCv()
 
-  const canvas = await blobToCanvas(blob)
-  const src = await imageToMat(canvas)
+  const image = source instanceof Blob ? await blobToImage(source) : source
   const ordered = orderPoints(corners)
   const { width, height } = computeOutputSize(ordered)
 
+  const src = cv.imread(image)
   const srcTri = cv.matFromArray(
     4,
     1,
     cv.CV_32FC2,
     ordered.flatMap((p) => [p.x, p.y]),
   )
-  const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
-    0, 0,
-    width, 0,
-    width, height,
-    0, height,
-  ])
-
+  const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, width, 0, width, height, 0, height])
   const M = cv.getPerspectiveTransform(srcTri, dstTri)
   const dst = new cv.Mat()
 
@@ -47,12 +38,9 @@ export async function perspectiveCorrect(
       cv.BORDER_CONSTANT,
       new cv.Scalar(255, 255, 255, 255),
     )
-
-    const outputCanvas = document.createElement('canvas')
-    outputCanvas.width = width
-    outputCanvas.height = height
-    cv.imshow(outputCanvas, dst)
-    return canvasToBlob(outputCanvas)
+    const output = createCanvas(width, height)
+    cv.imshow(output, dst)
+    return output
   } finally {
     src.delete()
     srcTri.delete()
@@ -62,45 +50,20 @@ export async function perspectiveCorrect(
   }
 }
 
-export async function rotateImage(blob: Blob, degrees: number): Promise<Blob> {
-  if (degrees % 360 === 0) return blob
+/**
+ * Rotates counter-clockwise by a multiple of 90° (the convention saved pages
+ * already use). Quarter turns map pixels exactly, so unlike an affine warp
+ * this neither blurs nor adds a border. Returns `canvas` itself for 0°.
+ */
+export function rotateCanvas(canvas: HTMLCanvasElement, degrees: number): HTMLCanvasElement {
+  const turns = ((Math.round(degrees / 90) % 4) + 4) % 4
+  if (turns === 0) return canvas
 
-  await loadOpenCV()
-  const cv = getCv()
-
-  const canvas = await blobToCanvas(blob)
-  const src = await imageToMat(canvas)
-  const center = new cv.Point(canvas.width / 2, canvas.height / 2)
-  const M = cv.getRotationMatrix2D(center, degrees, 1)
-
-  const matData = M as import('./opencv').CvMat & { data64F: Float64Array }
-  const cos = Math.abs(matData.data64F[0])
-  const sin = Math.abs(matData.data64F[1])
-  const newWidth = Math.round(src.rows * sin + src.cols * cos)
-  const newHeight = Math.round(src.rows * cos + src.cols * sin)
-
-  matData.data64F[2] += newWidth / 2 - canvas.width / 2
-  matData.data64F[5] += newHeight / 2 - canvas.height / 2
-
-  const dst = new cv.Mat()
-  try {
-    cv.warpAffine(
-      src,
-      dst,
-      M,
-      new cv.Size(newWidth, newHeight),
-      cv.INTER_LINEAR,
-      cv.BORDER_CONSTANT,
-      new cv.Scalar(255, 255, 255, 255),
-    )
-    const outputCanvas = document.createElement('canvas')
-    outputCanvas.width = newWidth
-    outputCanvas.height = newHeight
-    cv.imshow(outputCanvas, dst)
-    return canvasToBlob(outputCanvas)
-  } finally {
-    src.delete()
-    M.delete()
-    dst.delete()
-  }
+  const swap = turns % 2 === 1
+  const output = createCanvas(swap ? canvas.height : canvas.width, swap ? canvas.width : canvas.height)
+  const ctx = get2d(output)
+  ctx.translate(output.width / 2, output.height / 2)
+  ctx.rotate((-turns * Math.PI) / 2)
+  ctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2)
+  return output
 }

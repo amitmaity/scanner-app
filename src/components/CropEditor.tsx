@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
 import { detectDocumentEdges } from '../lib/detectEdges'
+import { clampPoint } from '../lib/geometry'
 import type { PendingCapture, Point } from '../types'
 
 interface CropEditorProps {
@@ -11,9 +12,16 @@ interface CropEditorProps {
 }
 
 const HANDLE_RADIUS = 22
+/** Corners arrive ordered top-left, clockwise (detection and defaults both do). */
+const CORNER_NAMES = ['Top-left', 'Top-right', 'Bottom-right', 'Bottom-left']
+/** Arrow keys move a corner by this share of the image's long side; ×10 with Shift. */
+const KEY_STEP_RATIO = 0.002
 
-function clamp(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, value))
+const KEY_DIRECTIONS: Record<string, Point> = {
+  ArrowLeft: { x: -1, y: 0 },
+  ArrowRight: { x: 1, y: 0 },
+  ArrowUp: { x: 0, y: -1 },
+  ArrowDown: { x: 0, y: 1 },
 }
 
 export function CropEditor({
@@ -37,10 +45,7 @@ export function CropEditor({
   )
 
   const toImage = useCallback(
-    (p: Point) => ({
-      x: clamp(p.x / scale, 0, capture.width),
-      y: clamp(p.y / scale, 0, capture.height),
-    }),
+    (p: Point) => clampPoint({ x: p.x / scale, y: p.y / scale }, capture.width, capture.height),
     [scale, capture.width, capture.height],
   )
 
@@ -76,13 +81,29 @@ export function CropEditor({
     }
   }
 
-  const handlePointerDown = (index: number) => (e: React.PointerEvent) => {
+  const handlePointerDown = (index: number) => (e: PointerEvent) => {
     e.preventDefault()
     setDragIndex(index)
     ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
   }
 
-  const handlePointerMove = (e: React.PointerEvent) => {
+  const handleKeyDown = (index: number) => (e: KeyboardEvent) => {
+    const direction = KEY_DIRECTIONS[e.key]
+    if (!direction) return
+    e.preventDefault()
+    const step =
+      Math.max(1, Math.max(capture.width, capture.height) * KEY_STEP_RATIO) * (e.shiftKey ? 10 : 1)
+    const corner = capture.corners[index]
+    const next = [...capture.corners]
+    next[index] = clampPoint(
+      { x: corner.x + direction.x * step, y: corner.y + direction.y * step },
+      capture.width,
+      capture.height,
+    )
+    onCornersChange(next)
+  }
+
+  const handlePointerMove = (e: PointerEvent) => {
     if (dragIndex === null) return
     const pos = getPointerPos(e.clientX, e.clientY)
     if (!pos) return
@@ -164,7 +185,9 @@ export function CropEditor({
                 height: HANDLE_RADIUS * 2,
               }}
               onPointerDown={handlePointerDown(i)}
-              aria-label={`Corner ${i + 1}`}
+              onKeyDown={handleKeyDown(i)}
+              aria-label={`${CORNER_NAMES[i] ?? `Corner ${i + 1}`} corner`}
+              aria-describedby="crop-hint"
             />
           ))}
         </div>
@@ -184,7 +207,9 @@ export function CropEditor({
             {detectError}
           </p>
         )}
-        <p className="hint">Drag corners to adjust document borders</p>
+        <p className="hint" id="crop-hint">
+          Drag corners, or focus one and use the arrow keys (Shift for bigger steps)
+        </p>
       </div>
     </div>
   )

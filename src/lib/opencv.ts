@@ -63,7 +63,9 @@ export interface OpenCvModule {
     borderMode?: number,
     borderValue?: unknown,
   ) => void
-  createCLAHE: (clipLimit: number, tileGridSize: unknown) => CvClahe
+  /** OpenCV.js builds expose CLAHE as a class; the factory exists only in some. */
+  CLAHE?: new (clipLimit: number, tileGridSize: unknown) => CvClahe
+  createCLAHE?: (clipLimit: number, tileGridSize: unknown) => CvClahe
   adaptiveThreshold: (
     src: CvMat,
     dst: CvMat,
@@ -210,16 +212,47 @@ export function loadOpenCV(options?: { timeoutMs?: number }): Promise<void> {
   return attempt
 }
 
-export async function imageToMat(image: HTMLImageElement | HTMLCanvasElement): Promise<CvMat> {
-  await loadOpenCV()
-  const cv = getCv()
-  return cv.imread(image)
+/** JPEG quality for a page's final image — the only lossy encode after capture. */
+export const OUTPUT_JPEG_QUALITY = 0.92
+/** Captures are stored at higher quality since every edit starts from them. */
+export const CAPTURE_JPEG_QUALITY = 0.95
+
+export type ImageSource = HTMLImageElement | HTMLCanvasElement | ImageBitmap
+
+export function sourceSize(source: ImageSource): { width: number; height: number } {
+  if ('naturalWidth' in source) {
+    return { width: source.naturalWidth, height: source.naturalHeight }
+  }
+  return { width: source.width, height: source.height }
 }
 
-export function matToCanvas(mat: CvMat): HTMLCanvasElement {
-  const cv = getCv()
+export function createCanvas(width: number, height: number): HTMLCanvasElement {
   const canvas = document.createElement('canvas')
-  cv.imshow(canvas, mat)
+  canvas.width = width
+  canvas.height = height
+  return canvas
+}
+
+export function get2d(
+  canvas: HTMLCanvasElement,
+  options?: CanvasRenderingContext2DSettings,
+): CanvasRenderingContext2D {
+  const ctx = canvas.getContext('2d', options)
+  if (!ctx) throw new Error('Could not get canvas context')
+  return ctx
+}
+
+/** Copies `source` into a new canvas no larger than `maxSide` (never upscales). */
+export function scaleToFit(source: ImageSource, maxSide = Infinity): HTMLCanvasElement {
+  const { width, height } = sourceSize(source)
+  const scale = Math.min(1, maxSide / Math.max(width, height))
+  const canvas = createCanvas(
+    Math.max(1, Math.round(width * scale)),
+    Math.max(1, Math.round(height * scale)),
+  )
+  const ctx = get2d(canvas)
+  ctx.imageSmoothingQuality = 'high'
+  ctx.drawImage(source, 0, 0, canvas.width, canvas.height)
   return canvas
 }
 
@@ -236,20 +269,13 @@ export async function blobToImage(blob: Blob): Promise<HTMLImageElement> {
 }
 
 export async function blobToCanvas(blob: Blob): Promise<HTMLCanvasElement> {
-  const img = await blobToImage(blob)
-  const canvas = document.createElement('canvas')
-  canvas.width = img.naturalWidth
-  canvas.height = img.naturalHeight
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })
-  if (!ctx) throw new Error('Could not get canvas context')
-  ctx.drawImage(img, 0, 0)
-  return canvas
+  return scaleToFit(await blobToImage(blob))
 }
 
 export function canvasToBlob(
   canvas: HTMLCanvasElement,
   type = 'image/jpeg',
-  quality = 0.92,
+  quality = OUTPUT_JPEG_QUALITY,
 ): Promise<Blob> {
   return new Promise((resolve, reject) => {
     canvas.toBlob(
@@ -262,6 +288,8 @@ export function canvasToBlob(
 
 export interface NormalizedImage {
   blob: Blob
+  /** The decoded pixels, so callers can run detection without decoding again. */
+  canvas: HTMLCanvasElement
   width: number
   height: number
 }
@@ -281,20 +309,15 @@ export async function normalizeImageOrientation(input: Blob): Promise<Normalized
     } catch {
       bitmap = await createImageBitmap(input)
     }
-    canvas = document.createElement('canvas')
-    canvas.width = bitmap.width
-    canvas.height = bitmap.height
-    const ctx = canvas.getContext('2d')
-    if (!ctx) {
+    try {
+      canvas = scaleToFit(bitmap)
+    } finally {
       bitmap.close()
-      throw new Error('Could not get canvas context')
     }
-    ctx.drawImage(bitmap, 0, 0)
-    bitmap.close()
   } else {
     canvas = await blobToCanvas(input)
   }
 
-  const blob = await canvasToBlob(canvas)
-  return { blob, width: canvas.width, height: canvas.height }
+  const blob = await canvasToBlob(canvas, 'image/jpeg', CAPTURE_JPEG_QUALITY)
+  return { blob, canvas, width: canvas.width, height: canvas.height }
 }

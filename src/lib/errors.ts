@@ -11,6 +11,7 @@ export type ScannerErrorCode =
   | 'STORAGE_UNAVAILABLE'
   | 'EXPORT_FAILED'
   | 'PERSIST_FAILED'
+  | 'EDIT_FAILED'
 
 export const ERROR_MESSAGES: Record<ScannerErrorCode, string> = {
   OPENCV_LOAD_FAILED: 'Could not load scanning tools. Check your connection and try again.',
@@ -26,11 +27,17 @@ export const ERROR_MESSAGES: Record<ScannerErrorCode, string> = {
   STORAGE_UNAVAILABLE: 'Could not access saved scans. Check browser storage permissions and try again.',
   EXPORT_FAILED: 'Export failed. Please try again.',
   PERSIST_FAILED: 'Could not save your changes. Please try again.',
+  EDIT_FAILED: 'Could not open this page for editing. Please try again.',
 }
 
+/** A toast. Errors by default; `tone: 'info'` is for notices such as "Page deleted". */
 export interface AppError {
   message: string
+  /** Runs from the toast's action button. */
   retry?: () => void
+  /** Label for that button; defaults to "Retry". */
+  actionLabel?: string
+  tone?: 'error' | 'info'
   critical?: boolean
   /** Identifies the subsystem that raised the error, so a recovery in that
    * subsystem can clear its own toast without dismissing unrelated errors. */

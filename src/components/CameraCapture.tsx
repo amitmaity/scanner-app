@@ -5,13 +5,74 @@ import {
   ERROR_MESSAGES,
   normalizeError,
 } from '../lib/errors'
-import { loadOpenCV, normalizeImageOrientation } from '../lib/opencv'
-import { useScannerStore } from '../state/store'
-import { defaultCorners, type PendingCapture } from '../types'
+import {
+  CAPTURE_JPEG_QUALITY,
+  canvasToBlob,
+  createCanvas,
+  get2d,
+  loadOpenCV,
+  normalizeImageOrientation,
+  type NormalizedImage,
+} from '../lib/opencv'
+import type { PendingCapture } from '../types'
 
 interface CameraCaptureProps {
   onCapture: (capture: PendingCapture) => void
   onCancel: () => void
+}
+
+/** Up to 4K: the browser picks the closest size the camera supports. */
+const VIDEO_CONSTRAINTS: MediaTrackConstraints = {
+  facingMode: { ideal: 'environment' },
+  width: { ideal: 3840 },
+  height: { ideal: 2160 },
+}
+/** Some devices never resolve takePhoto(); fall back to the video frame. */
+const PHOTO_TIMEOUT_MS = 4000
+
+type Stage = 'preparing' | 'loading-tools' | 'detecting'
+
+const STAGE_MESSAGES: Record<Stage, string> = {
+  preparing: 'Processing photo…',
+  'loading-tools': 'Loading scanning tools…',
+  detecting: 'Detecting edges…',
+}
+
+interface ImageCaptureLike {
+  takePhoto(): Promise<Blob>
+}
+type ImageCaptureConstructor = new (track: MediaStreamTrack) => ImageCaptureLike
+
+/**
+ * A still at the sensor's full resolution, which is usually well above the
+ * video stream's. Only Chromium implements ImageCapture; returns null where
+ * it's missing, fails or stalls.
+ */
+async function takeFullResolutionPhoto(stream: MediaStream): Promise<Blob | null> {
+  const ImageCaptureImpl = (window as Window & { ImageCapture?: ImageCaptureConstructor })
+    .ImageCapture
+  const [track] = stream.getVideoTracks()
+  if (!ImageCaptureImpl || !track) return null
+
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      new ImageCaptureImpl(track).takePhoto(),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), PHOTO_TIMEOUT_MS)
+      }),
+    ])
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function grabVideoFrame(video: HTMLVideoElement): HTMLCanvasElement {
+  const canvas = createCanvas(video.videoWidth, video.videoHeight)
+  get2d(canvas).drawImage(video, 0, 0)
+  return canvas
 }
 
 export function CameraCapture({ onCapture, onCancel }: CameraCaptureProps) {
@@ -24,9 +85,8 @@ export function CameraCapture({ onCapture, onCancel }: CameraCaptureProps) {
   const requestIdRef = useRef(0)
   const [stream, setStream] = useState<MediaStream | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [isCapturing, setIsCapturing] = useState(false)
-  const [loadingTools, setLoadingTools] = useState(false)
-  const opencvStatus = useScannerStore((s) => s.opencvStatus)
+  const [stage, setStage] = useState<Stage | null>(null)
+  const isCapturing = stage !== null
 
   const stopStream = useCallback(() => {
     requestIdRef.current += 1
@@ -48,11 +108,7 @@ export function CameraCapture({ onCapture, onCancel }: CameraCaptureProps) {
 
     try {
       const media = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-        },
+        video: VIDEO_CONSTRAINTS,
         audio: false,
       })
       if (requestId !== requestIdRef.current) {
@@ -86,24 +142,25 @@ export function CameraCapture({ onCapture, onCancel }: CameraCaptureProps) {
     }
   }, [stream])
 
-  const processImage = async (rawBlob: Blob) => {
-    setIsCapturing(true)
+  const processImage = async (prepare: () => Promise<NormalizedImage>) => {
+    setStage('preparing')
     setError(null)
     try {
-      const { blob, width, height } = await normalizeImageOrientation(rawBlob)
+      const image = await prepare()
 
-      setLoadingTools(true)
+      setStage('loading-tools')
       await loadOpenCV()
-      setLoadingTools(false)
-      const corners = await detectDocumentEdges(blob, width, height)
+      setStage('detecting')
+      // Reuse the decoded pixels rather than decoding the JPEG again.
+      const corners = await detectDocumentEdges(image.canvas, image.width, image.height)
 
       // Created last so a failed load or detection doesn't leak the URL.
       onCapture({
-        blob,
-        imageUrl: URL.createObjectURL(blob),
-        width,
-        height,
-        corners: corners.length === 4 ? corners : defaultCorners(width, height),
+        blob: image.blob,
+        imageUrl: URL.createObjectURL(image.blob),
+        width: image.width,
+        height: image.height,
+        corners,
       })
     } catch (err) {
       const { code, message } = normalizeError(err, 'CAPTURE_FAILED')
@@ -112,45 +169,44 @@ export function CameraCapture({ onCapture, onCancel }: CameraCaptureProps) {
       } else {
         setError('Could not process this image. Try another file or retake the photo.')
       }
-      setIsCapturing(false)
-      setLoadingTools(false)
+      setStage(null)
       void startCamera()
     }
   }
 
   const captureFromCamera = async () => {
     const video = videoRef.current
-    if (!video || !video.videoWidth) {
+    const media = streamRef.current
+    if (!video || !video.videoWidth || !media) {
       setError(ERROR_MESSAGES.CAPTURE_FAILED)
       return
     }
 
-    const canvas = document.createElement('canvas')
-    canvas.width = video.videoWidth
-    canvas.height = video.videoHeight
-    const ctx = canvas.getContext('2d')
-    if (!ctx) {
-      setError(ERROR_MESSAGES.CAPTURE_FAILED)
-      return
-    }
-    ctx.drawImage(video, 0, 0)
-
+    let frame: HTMLCanvasElement
     try {
-      const blob = await new Promise<Blob>((resolve, reject) => {
-        canvas.toBlob(
-          (b) => (b ? resolve(b) : reject(new Error('Capture failed'))),
-          'image/jpeg',
-          0.92,
-        )
-      })
-      stopStream()
-      await processImage(blob)
-    } catch (err) {
-      const { message } = normalizeError(err, 'CAPTURE_FAILED')
-      setError(message)
-      setIsCapturing(false)
-      void startCamera()
+      // Grab the frame first so there's always something to fall back on.
+      frame = grabVideoFrame(video)
+    } catch {
+      setError(ERROR_MESSAGES.CAPTURE_FAILED)
+      return
     }
+
+    await processImage(async () => {
+      const photo = await takeFullResolutionPhoto(media)
+      stopStream()
+      if (photo) {
+        try {
+          const still = await normalizeImageOrientation(photo)
+          if (still.width * still.height >= frame.width * frame.height) return still
+        } catch {
+          // Fall through to the video frame.
+        }
+      }
+      // A video frame is already upright, so it's encoded once with no
+      // orientation pass.
+      const blob = await canvasToBlob(frame, 'image/jpeg', CAPTURE_JPEG_QUALITY)
+      return { blob, canvas: frame, width: frame.width, height: frame.height }
+    })
   }
 
   const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -158,13 +214,10 @@ export function CameraCapture({ onCapture, onCancel }: CameraCaptureProps) {
     e.target.value = ''
     if (!file) return
     stopStream()
-    await processImage(file)
+    await processImage(() => normalizeImageOrientation(file))
   }
 
-  const overlayMessage =
-    loadingTools || opencvStatus === 'loading'
-      ? 'Loading scanning tools…'
-      : 'Detecting edges…'
+  const overlayMessage = stage ? STAGE_MESSAGES[stage] : ''
 
   return (
     <div className="capture-screen">

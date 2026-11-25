@@ -1,55 +1,85 @@
 import type { FilterSettings } from '../types'
-import { blobToCanvas, canvasToBlob, getCv, imageToMat, loadOpenCV } from './opencv'
+import {
+  blobToImage,
+  canvasToBlob,
+  createCanvas,
+  get2d,
+  getCv,
+  loadOpenCV,
+  scaleToFit,
+  type CvClahe,
+  type CvMat,
+  type ImageSource,
+  type OpenCvModule,
+} from './opencv'
+import { rotateCanvas } from './perspective'
 
+/** Long side of the enhance-screen preview. Full resolution is only rendered on save. */
+export const PREVIEW_MAX_SIDE = 1600
+/** Long side of page-grid thumbnails (~200 CSS px at 2x). */
+export const THUMBNAIL_MAX_SIDE = 400
+
+/**
+ * Adaptive-threshold neighbourhood in pixels, scaled with the image so a
+ * downscaled preview looks like the full-size result. `divisor` is chosen so a
+ * 1920px image gets the block size these filters used before they scaled.
+ */
+function thresholdBlockSize(mat: CvMat, divisor: number): number {
+  const size = Math.round(Math.max(mat.cols, mat.rows) / divisor)
+  return Math.max(3, size % 2 === 0 ? size + 1 : size)
+}
+
+/** Mutates `canvas` in place; only call it on a canvas this module created. */
 function applyBrightnessContrast(
   canvas: HTMLCanvasElement,
   brightness: number,
   contrast: number,
-): HTMLCanvasElement {
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })
-  if (!ctx) return canvas
-
+): void {
+  const ctx = get2d(canvas, { willReadFrequently: true })
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
   const data = imageData.data
   const factor = (259 * (contrast + 255)) / (255 * (259 - contrast))
 
   for (let i = 0; i < data.length; i += 4) {
     for (let c = 0; c < 3; c++) {
-      let value = data[i + c]
-      value = factor * (value - 128) + 128 + brightness
-      data[i + c] = Math.max(0, Math.min(255, value))
+      data[i + c] = factor * (data[i + c] - 128) + 128 + brightness
     }
   }
 
   ctx.putImageData(imageData, 0, 0)
-  return canvas
 }
 
-function canvasFromMat(cv: ReturnType<typeof getCv>, mat: import('./opencv').CvMat): HTMLCanvasElement {
-  const output = document.createElement('canvas')
+function createClahe(cv: OpenCvModule): CvClahe {
+  const tileGrid = new cv.Size(8, 8)
+  // The bundled OpenCV.js 4.9 only has the constructor; calling the missing
+  // factory used to throw and silently turn "Auto" into a threshold.
+  if (cv.CLAHE) return new cv.CLAHE(2.0, tileGrid)
+  if (cv.createCLAHE) return cv.createCLAHE(2.0, tileGrid)
+  throw new Error('CLAHE is not available in this OpenCV build')
+}
+
+function canvasFromMat(cv: OpenCvModule, mat: CvMat): HTMLCanvasElement {
+  const output = createCanvas(mat.cols, mat.rows)
   cv.imshow(output, mat)
   return output
 }
 
-function autoEnhanceMagicColor(
-  cv: ReturnType<typeof getCv>,
-  src: import('./opencv').CvMat,
-): HTMLCanvasElement {
+function magicColor(cv: OpenCvModule, src: CvMat): HTMLCanvasElement {
   const rgb = new cv.Mat()
   const lab = new cv.Mat()
   const channels = new cv.MatVector()
   const enhanced = new cv.Mat()
   const merged = new cv.Mat()
   const result = new cv.Mat()
-  let lChannel: import('./opencv').CvMat | null = null
-  let clahe: import('./opencv').CvClahe | null = null
+  let lChannel: CvMat | null = null
+  let clahe: CvClahe | null = null
 
   try {
     cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB)
     cv.cvtColor(rgb, lab, cv.COLOR_RGB2Lab)
     cv.split(lab, channels)
 
-    clahe = cv.createCLAHE(2.0, new cv.Size(8, 8))
+    clahe = createClahe(cv)
     // MatVector.get() returns a separately-owned Mat; keep the reference so we
     // can delete it exactly once. set() copies `enhanced` back into the vector.
     lChannel = channels.get(0)
@@ -59,7 +89,6 @@ function autoEnhanceMagicColor(
     cv.merge(channels, merged)
     cv.cvtColor(merged, result, cv.COLOR_Lab2RGB)
     cv.cvtColor(result, result, cv.COLOR_RGB2RGBA)
-
     return canvasFromMat(cv, result)
   } finally {
     clahe?.delete()
@@ -73,10 +102,7 @@ function autoEnhanceMagicColor(
   }
 }
 
-function autoEnhanceThreshold(
-  cv: ReturnType<typeof getCv>,
-  src: import('./opencv').CvMat,
-): HTMLCanvasElement {
+function threshold(cv: OpenCvModule, src: CvMat, divisor: number, C: number): HTMLCanvasElement {
   const gray = new cv.Mat()
   const binary = new cv.Mat()
   const rgba = new cv.Mat()
@@ -88,8 +114,8 @@ function autoEnhanceThreshold(
       255,
       cv.ADAPTIVE_THRESH_GAUSSIAN_C,
       cv.THRESH_BINARY,
-      11,
-      2,
+      thresholdBlockSize(gray, divisor),
+      C,
     )
     cv.cvtColor(binary, rgba, cv.COLOR_GRAY2RGBA)
     return canvasFromMat(cv, rgba)
@@ -100,116 +126,72 @@ function autoEnhanceThreshold(
   }
 }
 
-async function applyAutoEnhance(blob: Blob): Promise<HTMLCanvasElement> {
-  await loadOpenCV()
-  const cv = getCv()
-
-  const canvas = await blobToCanvas(blob)
-  const src = await imageToMat(canvas)
-
-  try {
-    return autoEnhanceMagicColor(cv, src)
-  } catch {
-    // Fallback: adaptive threshold gives a clean document look if the
-    // LAB/CLAHE path is unavailable in this OpenCV build.
-    return autoEnhanceThreshold(cv, src)
-  } finally {
-    src.delete()
-  }
-}
-
-async function applyGrayscale(blob: Blob): Promise<HTMLCanvasElement> {
-  await loadOpenCV()
-  const cv = getCv()
-  const canvas = await blobToCanvas(blob)
-  const src = await imageToMat(canvas)
+function grayscale(cv: OpenCvModule, src: CvMat): HTMLCanvasElement {
   const gray = new cv.Mat()
   const rgba = new cv.Mat()
-
   try {
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY)
     cv.cvtColor(gray, rgba, cv.COLOR_GRAY2RGBA)
-    const output = document.createElement('canvas')
-    output.width = canvas.width
-    output.height = canvas.height
-    cv.imshow(output, rgba)
-    return output
+    return canvasFromMat(cv, rgba)
   } finally {
-    src.delete()
     gray.delete()
     rgba.delete()
   }
 }
 
-async function applyBlackWhite(blob: Blob): Promise<HTMLCanvasElement> {
+async function applyMode(canvas: HTMLCanvasElement, mode: FilterSettings['mode']) {
+  if (mode === 'color') return canvas
+
   await loadOpenCV()
   const cv = getCv()
-  const canvas = await blobToCanvas(blob)
-  const src = await imageToMat(canvas)
-  const gray = new cv.Mat()
-  const binary = new cv.Mat()
-  const rgba = new cv.Mat()
-
+  const src = cv.imread(canvas)
   try {
-    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY)
-    cv.adaptiveThreshold(
-      gray,
-      binary,
-      255,
-      cv.ADAPTIVE_THRESH_GAUSSIAN_C,
-      cv.THRESH_BINARY,
-      15,
-      8,
-    )
-    cv.cvtColor(binary, rgba, cv.COLOR_GRAY2RGBA)
-    const output = document.createElement('canvas')
-    output.width = canvas.width
-    output.height = canvas.height
-    cv.imshow(output, rgba)
-    return output
+    switch (mode) {
+      case 'grayscale':
+        return grayscale(cv, src)
+      case 'blackwhite':
+        return threshold(cv, src, 128, 8)
+      case 'auto':
+      default:
+        try {
+          return magicColor(cv, src)
+        } catch {
+          // Adaptive threshold still gives a clean document look if the
+          // LAB/CLAHE path is unavailable in this OpenCV build.
+          return threshold(cv, src, 175, 2)
+        }
+    }
   } finally {
     src.delete()
-    gray.delete()
-    binary.delete()
-    rgba.delete()
   }
 }
 
-export async function applyFilter(blob: Blob, settings: FilterSettings): Promise<Blob> {
-  let canvas: HTMLCanvasElement
-
-  switch (settings.mode) {
-    case 'auto':
-      canvas = await applyAutoEnhance(blob)
-      break
-    case 'grayscale':
-      canvas = await applyGrayscale(blob)
-      break
-    case 'blackwhite':
-      canvas = await applyBlackWhite(blob)
-      break
-    case 'color':
-    default:
-      canvas = await blobToCanvas(blob)
-      break
-  }
+/**
+ * Rotates, filters and adjusts a cropped page, optionally at reduced size for
+ * previews. May return `source` itself when nothing changes it, so callers must
+ * treat the result as read-only.
+ */
+export async function renderPage(
+  source: HTMLCanvasElement,
+  settings: FilterSettings,
+  maxSide = Infinity,
+): Promise<HTMLCanvasElement> {
+  let canvas =
+    Math.max(source.width, source.height) > maxSide ? scaleToFit(source, maxSide) : source
+  canvas = rotateCanvas(canvas, settings.rotation)
+  canvas = await applyMode(canvas, settings.mode)
 
   if (settings.brightness !== 0 || settings.contrast !== 0) {
-    canvas = applyBrightnessContrast(canvas, settings.brightness, settings.contrast)
+    if (canvas === source) canvas = scaleToFit(source)
+    applyBrightnessContrast(canvas, settings.brightness, settings.contrast)
   }
-
-  return canvasToBlob(canvas)
+  return canvas
 }
 
-export async function createThumbnail(blob: Blob, maxSize = 120): Promise<string> {
-  const img = await blobToCanvas(blob)
-  const scale = Math.min(maxSize / img.width, maxSize / img.height, 1)
-  const canvas = document.createElement('canvas')
-  canvas.width = Math.round(img.width * scale)
-  canvas.height = Math.round(img.height * scale)
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return URL.createObjectURL(blob)
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-  const thumbBlob = await canvasToBlob(canvas, 'image/jpeg', 0.7)
-  return URL.createObjectURL(thumbBlob)
+export async function createThumbnail(
+  source: Blob | ImageSource,
+  maxSide = THUMBNAIL_MAX_SIDE,
+): Promise<Blob> {
+  const image = source instanceof Blob ? await blobToImage(source) : source
+  return canvasToBlob(scaleToFit(image, maxSide), 'image/jpeg', 0.8)
 }

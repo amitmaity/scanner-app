@@ -136,6 +136,46 @@ input[type='range'] {
   text-overflow: ellipsis;
 }
 
+.toolbar-title-button {
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 8px;
+  font-weight: inherit;
+}
+
+.toolbar-title-button:hover,
+.toolbar-title-button:focus-visible {
+  background: var(--bg-card);
+}
+
+.toolbar-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolbar-title-edit {
+  flex-shrink: 0;
+  font-size: 0.85em;
+  color: var(--text-muted);
+}
+
+.toolbar-title-input {
+  min-width: 0;
+  width: 100%;
+  padding: 0.35rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid var(--primary);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 1.05rem;
+  text-align: center;
+}
+
 .toolbar-left,
 .toolbar-right {
   display: flex;
@@ -545,6 +585,22 @@ input[type='range'] {
   background: var(--bg-card);
 }
 
+.page-thumb-button {
+  display: block;
+  width: 100%;
+  padding: 0;
+}
+
+.page-thumb-button:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+.pages-screen > .hint {
+  margin-top: 0.75rem;
+  text-align: center;
+}
+
 .page-thumb.placeholder {
   display: flex;
   align-items: center;
@@ -646,8 +702,16 @@ input[type='range'] {
 
 .modal-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
+  align-items: center;
   gap: 0.5rem;
+}
+
+.modal-note {
+  margin-right: auto;
+  color: var(--text-muted);
+  font-size: 0.9rem;
 }
 
 /* Feedback */
@@ -682,6 +746,10 @@ input[type='range'] {
   gap: 1rem;
   z-index: 200;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+.toast-info {
+  border-color: var(--primary);
 }
 
 .toast-actions {
