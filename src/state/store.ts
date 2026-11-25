@@ -30,6 +30,16 @@ export type OpenCvStatus = 'idle' | 'loading' | 'ready' | 'error'
 const TOAST_DISMISS_MS = 6000
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 
+/** Bumped for every enhancement run so a slower, older run can't overwrite the
+ * result of a newer one or clear `isProcessing` while the newer one is busy. */
+let enhanceRequestId = 0
+
+function revokeThumbnails(doc: ScanDocument) {
+  for (const page of doc.pages) {
+    if (page.thumbnailUrl) URL.revokeObjectURL(page.thumbnailUrl)
+  }
+}
+
 function clearToastTimer() {
   if (toastTimer) {
     clearTimeout(toastTimer)
@@ -40,6 +50,9 @@ function clearToastTimer() {
 interface ScannerState {
   step: AppStep
   documents: ScanDocument[]
+  /** A new scan with no pages yet. Kept out of `documents` (and so off the home
+   * list) until its first page is saved. */
+  draftDocument: ScanDocument | null
   currentDocumentId: string | null
   pendingCapture: PendingCapture | null
   croppedBlob: Blob | null
@@ -53,6 +66,8 @@ interface ScannerState {
   preloadOpenCV: () => Promise<void>
   newDocument: () => void
   openDocument: (id: string) => void
+  goHome: () => void
+  retake: () => void
   setStep: (step: AppStep) => void
   setPendingCapture: (capture: PendingCapture) => void
   updateCorners: (corners: Point[]) => void
@@ -81,6 +96,7 @@ function createEmptyDocument(): ScanDocument {
 export const useScannerStore = create<ScannerState>((set, get) => ({
   step: 'home',
   documents: [],
+  draftDocument: null,
   currentDocumentId: null,
   pendingCapture: null,
   croppedBlob: null,
@@ -103,8 +119,16 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
 
   hydrate: async () => {
     try {
-      const { documents, skippedPages } = await loadDocuments()
-      set({ documents })
+      const { documents: loaded, skippedPages } = await loadDocuments()
+      // Merge rather than replace: a scan saved while loading was still in
+      // progress must survive. Prefer the in-memory copy of any duplicate.
+      const inMemoryIds = new Set(get().documents.map((d) => d.id))
+      const fresh: ScanDocument[] = []
+      for (const doc of loaded) {
+        if (inMemoryIds.has(doc.id)) revokeThumbnails(doc)
+        else fresh.push(doc)
+      }
+      set((state) => ({ documents: [...state.documents, ...fresh] }))
       if (skippedPages > 0) {
         get().setError({
           message: `${skippedPages} saved page${skippedPages === 1 ? '' : 's'} could not be restored.`,
@@ -146,8 +170,8 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
   newDocument: () => {
     clearToastTimer()
     const doc = createEmptyDocument()
-    set((state) => ({
-      documents: [doc, ...state.documents],
+    set({
+      draftDocument: doc,
       currentDocumentId: doc.id,
       step: 'capture',
       pendingCapture: null,
@@ -155,12 +179,13 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
       workingBlob: null,
       workingFilter: { ...DEFAULT_FILTER },
       error: null,
-    }))
+    })
   },
 
   openDocument: (id) => {
     clearToastTimer()
     set({
+      draftDocument: null,
       currentDocumentId: id,
       step: 'pages',
       pendingCapture: null,
@@ -171,10 +196,22 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
     })
   },
 
+  goHome: () => {
+    get().clearPending()
+    set({ step: 'home', currentDocumentId: null, draftDocument: null })
+  },
+
+  retake: () => {
+    get().clearPending()
+    set({ step: 'capture' })
+  },
+
   setStep: (step) => set({ step }),
 
   setPendingCapture: (capture) => {
     clearToastTimer()
+    const previousUrl = get().pendingCapture?.imageUrl
+    if (previousUrl && previousUrl !== capture.imageUrl) URL.revokeObjectURL(previousUrl)
     set({
       pendingCapture: capture,
       step: 'crop',
@@ -224,6 +261,10 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
     const { croppedBlob, workingFilter } = get()
     if (!croppedBlob) return
 
+    const requestId = ++enhanceRequestId
+    // Superseded by a newer run, or the user has moved on to another capture.
+    const isStale = () => requestId !== enhanceRequestId || get().croppedBlob !== croppedBlob
+
     set({ isProcessing: true })
     get().setError(null)
     try {
@@ -232,8 +273,10 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
         source = await rotateImage(croppedBlob, workingFilter.rotation)
       }
       const processed = await applyFilter(source, workingFilter)
+      if (isStale()) return
       set({ workingBlob: processed, isProcessing: false })
     } catch (err) {
+      if (isStale()) return
       const { message } = normalizeError(err, 'FILTER_FAILED')
       set({ isProcessing: false })
       get().setError({
@@ -246,8 +289,17 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
   },
 
   addPageToDocument: async () => {
-    const { workingBlob, workingFilter, pendingCapture, currentDocumentId, documents } = get()
+    const { workingBlob, workingFilter, pendingCapture, currentDocumentId, documents, draftDocument } =
+      get()
     if (!workingBlob || !pendingCapture || !currentDocumentId) return
+
+    const existing =
+      documents.find((d) => d.id === currentDocumentId) ??
+      (draftDocument?.id === currentDocumentId ? draftDocument : null)
+    if (!existing) {
+      get().setError({ message: 'This scan is no longer available. Start a new scan.' })
+      return
+    }
 
     set({ isProcessing: true })
     get().setError(null)
@@ -266,29 +318,28 @@ export const useScannerStore = create<ScannerState>((set, get) => ({
         createdAt: Date.now(),
       }
 
-      const updatedDocs = documents.map((doc) => {
-        if (doc.id !== currentDocumentId) return doc
-        return {
-          ...doc,
-          pages: [...doc.pages, page],
-          updatedAt: Date.now(),
-        }
-      })
-
-      const current = updatedDocs.find((d) => d.id === currentDocumentId)
-      if (current) await saveDocument(current)
+      const updated: ScanDocument = {
+        ...existing,
+        pages: [...existing.pages, page],
+        updatedAt: Date.now(),
+      }
+      await saveDocument(updated)
 
       const captureUrl = pendingCapture.imageUrl
 
-      set({
-        documents: updatedDocs,
+      // Read the list fresh: hydrate may have merged documents in meanwhile.
+      set((state) => ({
+        documents: state.documents.some((d) => d.id === updated.id)
+          ? state.documents.map((d) => (d.id === updated.id ? updated : d))
+          : [updated, ...state.documents],
+        draftDocument: state.draftDocument?.id === updated.id ? null : state.draftDocument,
         step: 'pages',
         pendingCapture: null,
         croppedBlob: null,
         workingBlob: null,
         workingFilter: { ...DEFAULT_FILTER },
         isProcessing: false,
-      })
+      }))
 
       if (captureUrl) URL.revokeObjectURL(captureUrl)
     } catch (err) {

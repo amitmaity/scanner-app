@@ -2,13 +2,10 @@ import { useEffect, useState } from 'react'
 
 async function isAssetCached(url: string): Promise<boolean> {
   if (!('caches' in window)) return false
-  const keys = await caches.keys()
-  for (const key of keys) {
-    const cache = await caches.open(key)
-    const match = await cache.match(url)
-    if (match) return true
-  }
-  return false
+  // Workbox precaches unhashed files under `url?__WB_REVISION__=<hash>`, so an
+  // exact match never finds them.
+  const match = await caches.match(url, { ignoreSearch: true })
+  return match !== undefined
 }
 
 interface OfflineStatusProps {

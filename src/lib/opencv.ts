@@ -4,8 +4,17 @@ const BASE = import.meta.env.BASE_URL
 
 export const OPENCV_LOAD_TIMEOUT_MS = 30_000
 
+/** How long to wait for `window.cv` to appear after the script has run. */
+const READY_POLL_MS = 50
+const READY_POLL_LIMIT = 200
+
 let loadPromise: Promise<void> | null = null
 let loadTimeoutId: ReturnType<typeof setTimeout> | null = null
+/** Download and runtime start-up of opencv.js. It has no timeout of its own: a
+ * slow download that outlives a caller's timeout keeps going, and a retry waits
+ * on it instead of fetching the ~10 MB script a second time. Cleared only when
+ * the script itself fails. */
+let runtimePromise: Promise<void> | null = null
 
 declare global {
   interface Window {
@@ -113,13 +122,53 @@ export function getCv(): OpenCvModule {
   return window.cv
 }
 
-/** Test-only: allows retrying a failed load without reloading the page. */
-export function resetOpenCvLoader(): void {
-  loadPromise = null
+function clearLoadTimeout(): void {
   if (loadTimeoutId !== null) {
     window.clearTimeout(loadTimeoutId)
     loadTimeoutId = null
   }
+}
+
+/** Test-only: allows retrying a failed load without reloading the page. */
+export function resetOpenCvLoader(): void {
+  loadPromise = null
+  runtimePromise = null
+  clearLoadTimeout()
+}
+
+function loadRuntime(): Promise<void> {
+  if (runtimePromise) return runtimePromise
+
+  runtimePromise = new Promise<void>((resolve, reject) => {
+    const script = document.createElement('script')
+    const fail = () => {
+      runtimePromise = null
+      script.remove()
+      reject(new ScannerError('OPENCV_LOAD_FAILED', ERROR_MESSAGES.OPENCV_LOAD_FAILED))
+    }
+
+    script.src = `${BASE}opencv/opencv.js`
+    script.async = true
+    script.onload = () => {
+      let polls = 0
+      const checkReady = () => {
+        if (window.cv?.Mat) {
+          resolve()
+        } else if (window.cv) {
+          window.cv.onRuntimeInitialized = () => resolve()
+        } else if (++polls > READY_POLL_LIMIT) {
+          fail()
+        } else {
+          window.setTimeout(checkReady, READY_POLL_MS)
+        }
+      }
+      checkReady()
+    }
+    script.onerror = fail
+    document.head.appendChild(script)
+  })
+
+  return runtimePromise
 }
 
 export function loadOpenCV(options?: { timeoutMs?: number }): Promise<void> {
@@ -132,56 +181,33 @@ export function loadOpenCV(options?: { timeoutMs?: number }): Promise<void> {
   }
 
   const timeoutMs = options?.timeoutMs ?? OPENCV_LOAD_TIMEOUT_MS
+  const runtime = loadRuntime()
 
-  loadPromise = new Promise<void>((resolve, reject) => {
+  const attempt = new Promise<void>((resolve, reject) => {
     let settled = false
-
     const finish = (action: () => void) => {
       if (settled) return
       settled = true
-      if (loadTimeoutId !== null) {
-        window.clearTimeout(loadTimeoutId)
-        loadTimeoutId = null
-      }
+      clearLoadTimeout()
       action()
     }
-
     const fail = (err: unknown) => {
-      loadPromise = null
+      if (loadPromise === attempt) loadPromise = null
       reject(err)
     }
 
     loadTimeoutId = window.setTimeout(() => {
-      finish(() =>
-        fail(new ScannerError('OPENCV_TIMEOUT', ERROR_MESSAGES.OPENCV_TIMEOUT)),
-      )
+      finish(() => fail(new ScannerError('OPENCV_TIMEOUT', ERROR_MESSAGES.OPENCV_TIMEOUT)))
     }, timeoutMs)
 
-    const script = document.createElement('script')
-    script.src = `${BASE}opencv/opencv.js`
-    script.async = true
-    script.onload = () => {
-      const checkReady = () => {
-        if (settled) return
-        if (window.cv?.Mat) {
-          finish(() => resolve())
-        } else if (window.cv) {
-          window.cv.onRuntimeInitialized = () => finish(() => resolve())
-        } else {
-          window.setTimeout(checkReady, 50)
-        }
-      }
-      checkReady()
-    }
-    script.onerror = () => {
-      finish(() =>
-        fail(new ScannerError('OPENCV_LOAD_FAILED', ERROR_MESSAGES.OPENCV_LOAD_FAILED)),
-      )
-    }
-    document.head.appendChild(script)
+    runtime.then(
+      () => finish(resolve),
+      (err: unknown) => finish(() => fail(err)),
+    )
   })
 
-  return loadPromise
+  loadPromise = attempt
+  return attempt
 }
 
 export async function imageToMat(image: HTMLImageElement | HTMLCanvasElement): Promise<CvMat> {

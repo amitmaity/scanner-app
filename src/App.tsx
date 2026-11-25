@@ -17,6 +17,7 @@ export default function App({ offlineReady }: AppProps) {
   const {
     step,
     documents,
+    draftDocument,
     currentDocumentId,
     pendingCapture,
     workingBlob,
@@ -27,6 +28,8 @@ export default function App({ offlineReady }: AppProps) {
     preloadOpenCV,
     newDocument,
     openDocument,
+    goHome,
+    retake,
     setStep,
     setPendingCapture,
     updateCorners,
@@ -36,7 +39,6 @@ export default function App({ offlineReady }: AppProps) {
     addPageToDocument,
     deletePage,
     reorderPages,
-    clearPending,
     setError,
   } = useScannerStore()
 
@@ -44,9 +46,12 @@ export default function App({ offlineReady }: AppProps) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const prevStepRef = useRef(step)
 
+  const isDraft = draftDocument !== null && draftDocument.id === currentDocumentId
   const currentDocument = useMemo(
-    () => documents.find((d) => d.id === currentDocumentId) ?? null,
-    [documents, currentDocumentId],
+    () =>
+      documents.find((d) => d.id === currentDocumentId) ??
+      (draftDocument?.id === currentDocumentId ? draftDocument : null),
+    [documents, draftDocument, currentDocumentId],
   )
 
   useEffect(() => {
@@ -74,12 +79,6 @@ export default function App({ offlineReady }: AppProps) {
     }
     prevStepRef.current = step
   }, [step, applyEnhancement])
-
-  const goHome = () => {
-    clearPending()
-    setStep('home')
-    useScannerStore.setState({ currentDocumentId: null })
-  }
 
   const handleDeleteDocument = async (id: string) => {
     if (!confirm('Delete this scan?')) return
@@ -146,7 +145,7 @@ export default function App({ offlineReady }: AppProps) {
       {step === 'capture' && (
         <CameraCapture
           onCapture={setPendingCapture}
-          onCancel={() => (currentDocumentId ? setStep('pages') : goHome())}
+          onCancel={() => (currentDocument && !isDraft ? setStep('pages') : goHome())}
         />
       )}
 
@@ -155,11 +154,7 @@ export default function App({ offlineReady }: AppProps) {
           capture={pendingCapture}
           onCornersChange={updateCorners}
           onConfirm={() => void confirmCrop()}
-          onCancel={() => {
-            if (pendingCapture.imageUrl) URL.revokeObjectURL(pendingCapture.imageUrl)
-            setStep('capture')
-            useScannerStore.setState({ pendingCapture: null })
-          }}
+          onCancel={retake}
           isProcessing={isProcessing}
         />
       )}
@@ -171,7 +166,7 @@ export default function App({ offlineReady }: AppProps) {
           onChange={setFilter}
           onApply={() => void applyEnhancement()}
           onAddPage={() => void addPageToDocument()}
-          onRetake={() => setStep('capture')}
+          onRetake={retake}
           isProcessing={isProcessing}
         />
       )}

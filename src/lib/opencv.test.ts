@@ -8,6 +8,7 @@ function mockOpencvScript() {
     async: true,
     onload: null as ((ev: Event) => void) | null,
     onerror: null as ((ev: Event) => void) | null,
+    remove: vi.fn(),
   }
 
   vi.spyOn(document, 'createElement').mockImplementation(((
@@ -58,6 +59,37 @@ describe('loadOpenCV', () => {
     const assertion = expect(pending).rejects.toMatchObject({ code: 'OPENCV_TIMEOUT' })
     await vi.advanceTimersByTimeAsync(40)
     await assertion
+  })
+
+  it('reuses the in-flight download when retrying after a timeout', async () => {
+    const script = mockOpencvScript()
+    vi.useFakeTimers()
+
+    const first = loadOpenCV({ timeoutMs: 40 })
+    const firstAssertion = expect(first).rejects.toMatchObject({ code: 'OPENCV_TIMEOUT' })
+    await vi.advanceTimersByTimeAsync(40)
+    await firstAssertion
+
+    // The slow download is still going; a retry must wait on it rather than
+    // append a second <script> and fetch the 10 MB file again.
+    const second = loadOpenCV({ timeoutMs: 1000 })
+    window.cv = { Mat: class {} } as unknown as typeof window.cv
+    script.onload?.(new Event('load'))
+    await expect(second).resolves.toBeUndefined()
+
+    const scriptsCreated = vi
+      .mocked(document.createElement)
+      .mock.calls.filter(([tag]) => tag === 'script').length
+    expect(scriptsCreated).toBe(1)
+    expect(document.head.appendChild).toHaveBeenCalledTimes(1)
+  })
+
+  it('removes a failed script tag', async () => {
+    const script = mockOpencvScript()
+    const pending = loadOpenCV({ timeoutMs: 1000 })
+    script.onerror?.(new Event('error'))
+    await expect(pending).rejects.toMatchObject({ code: 'OPENCV_LOAD_FAILED' })
+    expect(script.remove).toHaveBeenCalled()
   })
 
   it('resolves immediately when OpenCV is already present', async () => {

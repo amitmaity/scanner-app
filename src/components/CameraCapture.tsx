@@ -18,7 +18,10 @@ export function CameraCapture({ onCapture, onCancel }: CameraCaptureProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
-  const activeRef = useRef(true)
+  /** Bumped whenever the camera is stopped or restarted, so a getUserMedia call
+   * that resolves late (e.g. "Try again" tapped twice) stops its own stream
+   * instead of orphaning whichever one was assigned first. */
+  const requestIdRef = useRef(0)
   const [stream, setStream] = useState<MediaStream | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [isCapturing, setIsCapturing] = useState(false)
@@ -26,6 +29,7 @@ export function CameraCapture({ onCapture, onCancel }: CameraCaptureProps) {
   const opencvStatus = useScannerStore((s) => s.opencvStatus)
 
   const stopStream = useCallback(() => {
+    requestIdRef.current += 1
     streamRef.current?.getTracks().forEach((track) => track.stop())
     streamRef.current = null
     setStream(null)
@@ -34,6 +38,7 @@ export function CameraCapture({ onCapture, onCancel }: CameraCaptureProps) {
 
   const startCamera = useCallback(async () => {
     stopStream()
+    const requestId = requestIdRef.current
     setError(null)
 
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -50,7 +55,7 @@ export function CameraCapture({ onCapture, onCancel }: CameraCaptureProps) {
         },
         audio: false,
       })
-      if (!activeRef.current) {
+      if (requestId !== requestIdRef.current) {
         media.getTracks().forEach((t) => t.stop())
         return
       }
@@ -60,15 +65,16 @@ export function CameraCapture({ onCapture, onCancel }: CameraCaptureProps) {
         videoRef.current.srcObject = media
       }
     } catch (err) {
+      if (requestId !== requestIdRef.current) return
       setError(cameraErrorFromUnknown(err).message)
     }
   }, [stopStream])
 
   useEffect(() => {
-    activeRef.current = true
     void startCamera()
+    const requestIds = requestIdRef
     return () => {
-      activeRef.current = false
+      requestIds.current += 1
       streamRef.current?.getTracks().forEach((track) => track.stop())
       streamRef.current = null
     }
@@ -85,16 +91,16 @@ export function CameraCapture({ onCapture, onCancel }: CameraCaptureProps) {
     setError(null)
     try {
       const { blob, width, height } = await normalizeImageOrientation(rawBlob)
-      const url = URL.createObjectURL(blob)
 
       setLoadingTools(true)
       await loadOpenCV()
       setLoadingTools(false)
       const corners = await detectDocumentEdges(blob, width, height)
 
+      // Created last so a failed load or detection doesn't leak the URL.
       onCapture({
         blob,
-        imageUrl: url,
+        imageUrl: URL.createObjectURL(blob),
         width,
         height,
         corners: corners.length === 4 ? corners : defaultCorners(width, height),
