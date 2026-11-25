@@ -15,7 +15,7 @@ vi.mock('jspdf', () => ({
   },
 }))
 
-vi.mock('./opencv', () => ({
+vi.mock('./image', () => ({
   OUTPUT_JPEG_QUALITY: 0.92,
   blobToImage: vi.fn(),
   canvasToBlob: vi.fn(),
@@ -26,7 +26,7 @@ vi.mock('./opencv', () => ({
   }),
 }))
 
-import { blobToImage, canvasToBlob } from './opencv'
+import { blobToImage, canvasToBlob } from './image'
 import {
   buildImages,
   buildPdf,

@@ -1,6 +1,6 @@
 import type { Point } from '../types'
-import { computeOutputSize, orderPoints } from './geometry'
-import { blobToImage, createCanvas, get2d, getCv, loadOpenCV } from './opencv'
+import { warpQuad } from './cv/client'
+import { blobToImage, canvasToRaw, createCanvas, get2d, rawToCanvas, scaleToFit } from './image'
 
 /**
  * Warps the quad at `corners` to a flat rectangle. Returns pixels rather than
@@ -10,44 +10,9 @@ export async function perspectiveCorrect(
   source: Blob | HTMLImageElement | HTMLCanvasElement,
   corners: Point[],
 ): Promise<HTMLCanvasElement> {
-  await loadOpenCV()
-  const cv = getCv()
-
   const image = source instanceof Blob ? await blobToImage(source) : source
-  const ordered = orderPoints(corners)
-  const { width, height } = computeOutputSize(ordered)
-
-  const src = cv.imread(image)
-  const srcTri = cv.matFromArray(
-    4,
-    1,
-    cv.CV_32FC2,
-    ordered.flatMap((p) => [p.x, p.y]),
-  )
-  const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, width, 0, width, height, 0, height])
-  const M = cv.getPerspectiveTransform(srcTri, dstTri)
-  const dst = new cv.Mat()
-
-  try {
-    cv.warpPerspective(
-      src,
-      dst,
-      M,
-      new cv.Size(width, height),
-      cv.INTER_LINEAR,
-      cv.BORDER_CONSTANT,
-      new cv.Scalar(255, 255, 255, 255),
-    )
-    const output = createCanvas(width, height)
-    cv.imshow(output, dst)
-    return output
-  } finally {
-    src.delete()
-    srcTri.delete()
-    dstTri.delete()
-    M.delete()
-    dst.delete()
-  }
+  const canvas = image instanceof HTMLCanvasElement ? image : scaleToFit(image)
+  return rawToCanvas(await warpQuad(canvasToRaw(canvas), corners))
 }
 
 /**

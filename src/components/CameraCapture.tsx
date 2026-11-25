@@ -5,15 +5,15 @@ import {
   ERROR_MESSAGES,
   normalizeError,
 } from '../lib/errors'
+import { loadOpenCV } from '../lib/cv/client'
 import {
   CAPTURE_JPEG_QUALITY,
   canvasToBlob,
   createCanvas,
   get2d,
-  loadOpenCV,
   normalizeImageOrientation,
   type NormalizedImage,
-} from '../lib/opencv'
+} from '../lib/image'
 import type { PendingCapture } from '../types'
 
 interface CameraCaptureProps {

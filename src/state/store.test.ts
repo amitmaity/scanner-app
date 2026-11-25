@@ -22,8 +22,11 @@ vi.mock('../lib/perspective', () => ({
   perspectiveCorrect: vi.fn(),
 }))
 
-vi.mock('../lib/opencv', () => ({
+vi.mock('../lib/cv/client', () => ({
   loadOpenCV: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('../lib/image', () => ({
   canvasToBlob: vi.fn(),
   blobToImage: vi.fn(),
   sourceSize: (img: { naturalWidth: number; naturalHeight: number }) => ({
@@ -42,7 +45,8 @@ import {
   saveThumbnail,
 } from '../lib/storage'
 import { createThumbnail, renderPage } from '../lib/filters'
-import { blobToImage, canvasToBlob, loadOpenCV } from '../lib/opencv'
+import { loadOpenCV } from '../lib/cv/client'
+import { blobToImage, canvasToBlob } from '../lib/image'
 import { perspectiveCorrect } from '../lib/perspective'
 import { PAGE_DELETED_MESSAGE, removeDocument, useScannerStore } from './store'
 

@@ -1,6 +1,6 @@
 import type { Page } from '../types'
 import { ScannerError } from './errors'
-import { blobToImage, canvasToBlob, OUTPUT_JPEG_QUALITY, scaleToFit, sourceSize } from './opencv'
+import { blobToImage, canvasToBlob, OUTPUT_JPEG_QUALITY, scaleToFit, sourceSize } from './image'
 
 export type ExportFormat = 'pdf' | 'jpeg' | 'png'
 

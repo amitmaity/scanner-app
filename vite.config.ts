@@ -8,6 +8,10 @@ const deployUrl = 'https://amitmaity.github.io/scanner-app/'
 
 export default defineConfig({
   base,
+  // The OpenCV worker is a module worker (all Vite serves in dev).
+  worker: {
+    format: 'es',
+  },
   plugins: [
     react(),
     VitePWA({

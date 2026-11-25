@@ -58,6 +58,6 @@ The app will be available at [https://amitmaity.github.io/scanner-app/](https://
 
 - React + Vite + TypeScript
 - vite-plugin-pwa
-- OpenCV.js (self-hosted)
+- OpenCV.js (self-hosted), run in a Web Worker so image processing never blocks the UI
 - jsPDF
 - Zustand + IndexedDB

@@ -7,7 +7,8 @@ import {
 } from '../lib/errors'
 import { createThumbnail, PREVIEW_MAX_SIDE, renderPage } from '../lib/filters'
 import { defaultCorners } from '../lib/geometry'
-import { blobToImage, canvasToBlob, loadOpenCV, sourceSize } from '../lib/opencv'
+import { loadOpenCV } from '../lib/cv/client'
+import { blobToImage, canvasToBlob, sourceSize } from '../lib/image'
 import { perspectiveCorrect } from '../lib/perspective'
 import {
   deleteDocument,
